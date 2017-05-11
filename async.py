@@ -1,10 +1,14 @@
-import contextlib, asyncio, threading
+import contextlib
+import asyncio
+import threading
 
 loop = None
+
 
 def set_default_loop(l):
     global loop
     loop = l
+
 
 def call_soon(cb, block=False):
     """
@@ -17,6 +21,7 @@ def call_soon(cb, block=False):
         cond = threading.Condition(mutex)
         mutex.acquire()
     result, exception = None, None
+
     def wrapped_cb():
         nonlocal result, exception
         try:
@@ -36,6 +41,7 @@ def call_soon(cb, block=False):
         raise exception
     return result
 
+
 def complete(future, result=None, exception=None, block=False):
     """
     Set completion status (either result or exception) of future; thread-safe.
@@ -43,6 +49,7 @@ def complete(future, result=None, exception=None, block=False):
     """
     if future is None:
         return False
+
     def cb():
         try:
             if exception is not None:
@@ -53,6 +60,7 @@ def complete(future, result=None, exception=None, block=False):
         except asyncio.futures.InvalidStateError:
             return False
     return call_soon(cb, block)
+
 
 class Fuse:
     """
@@ -71,6 +79,7 @@ class Fuse:
         self.lock = threading.Lock()
         self.listeners = set()
         self.triggered = False
+
     def trigger(self, result=None, exception=None, block=True):
         with self.lock:
             if not self.triggered:
@@ -80,18 +89,21 @@ class Fuse:
                 for f in self.listeners:
                     complete(f, result, exception, block)
                 self.listeners.clear()
+
     def listen(self, f):
         with self.lock:
             if self.triggered:
                 complete(f, self.result, self.exception, True)
             else:
                 self.listeners.add(f)
+
     def unlisten(self, f):
         with self.lock:
             try:
                 self.listeners.remove(f)
             except KeyError:
                 pass
+
     @contextlib.contextmanager
     def __call__(self, f=None):
         if f is None:
@@ -99,8 +111,10 @@ class Fuse:
         self.listen(f)
         yield f
         self.unlisten(f)
+
     def __bool__(self):
         return self.triggered
+
 
 class FutureStream:
     """
@@ -113,21 +127,24 @@ class FutureStream:
     def __init__(self, futureFactory=asyncio.Future):
         self.lock = threading.Lock()
         self.factory = futureFactory
-        self.early = [] # FIFO of futures representing claims that arrived before posts
-        self.late  = [] # FIFO of futures representing posts that arrived before claims
+        self.early = []  # FIFO of futures: claims that arrived before posts
+        self.late = []   # FIFO of futures: posts that arrived before claims
         self.exception = None
+
     def new_future(self):
         """ Caller must hold self.lock. """
         x = self.factory()
         if self.exception is not None:
             x.set_exception(self.exception)
         return x
+
     def set_exception(self, exception):
         with self.lock:
             self.exception = exception
             for f in self.early:
                 complete(f, exception=exception)
             self.early.clear()
+
     def claim(self):
         with self.lock:
             if self.late:
@@ -138,6 +155,7 @@ class FutureStream:
                 if not x.done():
                     self.early.append(x)
         return x
+
     def post(self, result=None, exception=None):
         with self.lock:
             while self.early:
@@ -154,6 +172,7 @@ class FutureStream:
                     # results posted to a closed future stream are lost
                     raise self.exception
 
+
 class KeyedEvent:
     """
     KeyedEvent represents a multimap of listening futures.  A context manager
@@ -162,14 +181,18 @@ class KeyedEvent:
     """
     def __init__(self):
         self.d = {}
+
     def trigger(self, key, result=None, exception=None):
         for l in self.d.get(key, ()):
             complete(l, result, exception)
+
     def listen(self, key, f):
         s = self.d.setdefault(key, set())
         s.add(f)
+
     def unlisten(self, key, f):
         self.d[key].remove(f)
+
     @contextlib.contextmanager
     def __call__(self, key, f=None):
         if f is None:
@@ -177,4 +200,3 @@ class KeyedEvent:
         self.listen(key, f)
         yield f
         self.unlisten(key, f)
-
